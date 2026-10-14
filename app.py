@@ -1,12 +1,10 @@
 
-import io
 import traceback
 from datetime import datetime
 
 import pandas as pd
 import requests
 import streamlit as st
-
 
 st.set_page_config(
     page_title="رادار حرفه‌ای بازار ایران",
@@ -15,91 +13,97 @@ st.set_page_config(
 )
 
 st.title("📊 رادار حرفه‌ای بازار ایران")
-st.caption(
-    "نسخه آزمایشی — بررسی اتصال به داده‌های واقعی بورس تهران"
+st.caption("نسخه آزمایشی اتصال به API بازار تهران")
+
+URL = "https://cdn.tsetmc.com/api/ClosingPrice/GetMarketWatch"
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/130.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.tsetmc.com/",
+    "Origin": "https://www.tsetmc.com",
+}
+
+PARAMS = {
+    "market": 0,
+    "industrialGroup": "",
+    "showTraded": "false",
+    "withBestLimits": "false",
+    "hEven": 0,
+    "RefID": 0,
+}
+
+for i in range(9):
+    PARAMS[f"paperTypes[{i}]"] = i + 1
+
+st.write(
+    "زمان اجرای صفحه:",
+    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 )
 
-URL = (
-    "https://old.tsetmc.com/"
-    "tsev2/excel/MarketWatchPlus.aspx?d=0"
-)
-
-st.info(
-    "این نسخه فقط اطلاعات دریافتی از منبع را نمایش می‌دهد. "
-    "تا زمانی که داده‌ها تأیید نشده‌اند، "
-    "از آن برای تصمیم معاملاتی استفاده نکنید."
-)
-
-
-@st.cache_data(ttl=90, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def get_market_data():
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/130.0.0.0 Safari/537.36"
-        ),
-        "Accept": "*/*",
-    }
-
     response = requests.get(
         URL,
-        headers=headers,
-        timeout=(15, 45),
+        params=PARAMS,
+        headers=HEADERS,
+        timeout=(15, 30),
     )
 
     response.raise_for_status()
 
-    if not response.content:
-        raise ValueError("سرور فایل خالی برگردانده است.")
-
     try:
-        data = pd.read_excel(
-            io.BytesIO(response.content)
-        )
+        result = response.json()
     except Exception as exc:
         raise ValueError(
-            "پاسخ سرور دریافت شد، اما فایل به‌صورت Excel "
-            "قابل‌خواندن نیست. ممکن است ساختار منبع تغییر کرده "
-            "یا به‌جای فایل، صفحه خطا دریافت شده باشد."
+            "پاسخ سرور JSON معتبر نیست. "
+            f"نوع محتوا: {response.headers.get('Content-Type')}; "
+            f"نمونه پاسخ: {response.text[:500]}"
         ) from exc
 
-    if data.empty:
-        raise ValueError("فایل دریافت شد اما هیچ ردیفی ندارد.")
+    if not isinstance(result, dict):
+        raise ValueError(
+            f"ساختار پاسخ غیرمنتظره است: {type(result).__name__}"
+        )
 
-    return data
+    rows = result.get("marketwatch")
 
+    if rows is None:
+        raise ValueError(
+            "کلید marketwatch در پاسخ وجود ندارد. "
+            f"کلیدهای دریافتی: {list(result.keys())}"
+        )
 
-col1, col2 = st.columns(2)
+    if not rows:
+        raise ValueError(
+            "API پاسخ داده اما فهرست بازار خالی است. "
+            f"کلیدهای پاسخ: {list(result.keys())}"
+        )
 
-with col1:
-    st.write(
-        "زمان اجرای صفحه:",
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    )
+    return pd.DataFrame(rows), result
 
-with col2:
-    if st.button("🔄 به‌روزرسانی داده‌های بازار"):
-        get_market_data.clear()
-
-search = st.text_input(
-    "جست‌وجوی نماد یا نام شرکت",
-    placeholder="مثلاً فولاد",
-)
+if st.button("🔄 دریافت مجدد اطلاعات"):
+    get_market_data.clear()
 
 try:
-    with st.spinner("در حال دریافت داده از TSETMC..."):
-        data = get_market_data()
+    with st.spinner("در حال اتصال به API جدید TSETMC..."):
+        data, raw_result = get_market_data()
 
     st.success(
-        f"دریافت موفق بود؛ تعداد ردیف‌ها: {len(data):,}"
+        f"پاسخ دریافت شد؛ تعداد ردیف‌ها: {len(data):,}"
     )
 
-    st.write("ستون‌های فایل:", ", ".join(map(str, data.columns)))
+    st.caption("ستون‌های دریافتی: " + ", ".join(map(str, data.columns)))
+
+    search = st.text_input("جست‌وجوی نماد یا نام شرکت")
 
     if search.strip():
         mask = data.astype(str).apply(
-            lambda column: column.str.contains(
+            lambda col: col.str.contains(
                 search.strip(),
                 case=False,
                 na=False,
@@ -109,8 +113,6 @@ try:
 
         data = data.loc[mask]
 
-        st.write(f"تعداد نتایج جست‌وجو: {len(data):,}")
-
     st.dataframe(
         data,
         use_container_width=True,
@@ -118,25 +120,23 @@ try:
     )
 
     st.download_button(
-        label="⬇️ دانلود اطلاعات CSV",
+        "⬇️ دانلود اطلاعات CSV",
         data=data.to_csv(index=False).encode("utf-8-sig"),
-        file_name="market_data.csv",
+        file_name="market_watch.csv",
         mime="text/csv",
     )
 
 except Exception as error:
-    st.error("دریافت یا پردازش داده از TSETMC ناموفق بود.")
-
-    st.subheader("نوع خطا")
+    st.error("دریافت اطلاعات بازار ناموفق بود.")
+    st.write("نوع خطا:")
     st.code(type(error).__name__)
+    st.write("پیام خطا:")
+    st.code(str(error))
 
-    st.subheader("پیام خطا")
-    st.code(repr(error))
-
-    with st.expander("جزئیات فنی کامل", expanded=True):
+    with st.expander("جزئیات فنی کامل"):
         st.code(traceback.format_exc())
 
     st.warning(
-        "این نسخه هنوز اتصال موفق به منبع داده را تأیید نکرده است. "
-        "تا رفع خطا، اطلاعات آن را مبنای معامله قرار ندهید."
+        "تا زمانی که داده واقعی دریافت و بررسی نشده، "
+        "این صفحه را مبنای معامله قرار ندهید."
     )
