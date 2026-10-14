@@ -1,64 +1,120 @@
 
 import streamlit as st
+import pandas as pd
 import requests
 from datetime import datetime
 
-st.set_page_config(page_title="Tindex API Test", layout="wide")
-st.title("آزمایش اتصال به Tindex")
-st.caption("منبع داده: Tindex API")
+st.set_page_config(
+    page_title="رادار بازار ایران",
+    page_icon="📊",
+    layout="wide"
+)
 
-if st.button("آزمایش اتصال"):
-    try:
-        token = st.secrets["TINDEX_API_TOKEN"]
+BASE = "https://tindex.app/api/public"
 
-        url = (
-            "https://tindex.app/api/public/"
-            "indicators/by-category/precious-metals"
-        )
+st.title("📊 رادار حرفه‌ای بازار ایران")
+st.caption("منبع داده: Tindex | قیمت‌ها به تومان، مگر آنکه واحد دیگری درج شده باشد")
 
-        response = requests.get(
-            url,
-            params={"lang": "en"},
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            },
-            timeout=20,
-        )
+@st.cache_data(ttl=60)
+def get_data(path):
+    token = st.secrets["TINDEX_API_TOKEN"]
+    response = requests.get(
+        f"{BASE}/{path}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+        params={"lang": "en"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
 
-        st.write("کد پاسخ سرور:", response.status_code)
+    if not payload.get("success"):
+        raise ValueError(payload.get("message", "API request failed"))
 
-        if response.status_code == 200:
-            payload = response.json()
+    return payload.get("data")
 
-            if payload.get("success"):
-                data = payload.get("data", {})
-                rows = data.get("rows", []) if isinstance(data, dict) else data
+def to_rows(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("rows", "rates", "items", "data"):
+            if isinstance(data.get(key), list):
+                return data[key]
+        if all(isinstance(v, dict) for v in data.values()):
+            return [
+                {"slug": k, **v} for k, v in data.items()
+            ]
+    return []
 
-                st.success("اتصال موفق است.")
-                st.write("زمان آزمایش:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                st.write("تعداد ردیف‌های دریافتی:", len(rows))
+def show_table(rows):
+    if not rows:
+        st.info("داده قابل نمایش در قالب جدول پیدا نشد.")
+        return
 
-                if rows:
-                    st.json(rows)
-                else:
-                    st.warning("اتصال موفق بود، اما داده‌ای برنگشت.")
-            else:
-                st.error("API پاسخ ناموفق داده است.")
-                st.json(payload)
+    df = pd.DataFrame(rows)
+    preferred = [
+        "name", "price", "unit", "change",
+        "updated_at", "slug"
+    ]
+    cols = [c for c in preferred if c in df.columns]
+    if cols:
+        df = df[cols].rename(columns={
+            "name": "نام",
+            "price": "قیمت",
+            "unit": "واحد",
+            "change": "تغییر روزانه (%)",
+            "updated_at": "زمان به‌روزرسانی",
+            "slug": "شناسه",
+        })
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
-        else:
-            st.error("پاسخ API موفق نبود.")
-            st.text(response.text[:1500])
+try:
+    metals = to_rows(get_data(
+        "indicators/by-category/precious-metals"
+    ))
 
-    except KeyError:
-        st.error("توکن TINDEX_API_TOKEN در Secrets پیدا نشد.")
+    st.subheader("🥇 طلا، سکه و فلزات گران‌بها")
 
-    except requests.exceptions.Timeout:
-        st.error("اتصال به Tindex بیش از ۲۰ ثانیه طول کشید.")
+    important = {
+        "gold-18k", "GOLD-24K", "emami-coin",
+        "HALF-COIN", "QUARTER-COIN", "GERAMI-COIN",
+        "xauusd", "SILVER-999", "xagusd"
+    }
 
-    except requests.exceptions.RequestException as e:
-        st.error(f"خطای اتصال: {type(e).__name__}: {e}")
+    selected = [
+        row for row in metals
+        if str(row.get("slug", "")).lower()
+        in {s.lower() for s in important}
+    ]
 
-    except Exception as e:
-        st.error(f"خطا: {type(e).__name__}: {e}")
+    if selected:
+        show_table(selected)
+    else:
+        show_table(metals)
+
+except Exception as e:
+    st.error(f"خطا در دریافت اطلاعات طلا: {type(e).__name__}: {e}")
+
+st.divider()
+st.subheader("💱 نرخ ارز")
+
+try:
+    currencies = get_data("currency-rates")
+    currency_rows = to_rows(currencies)
+
+    if currency_rows:
+        show_table(currency_rows)
+    else:
+        st.warning("پاسخ ارز دریافت شد، اما قالب آن هنوز برای جدول شناسایی نشده است.")
+        st.json(currencies)
+
+except Exception as e:
+    st.error(f"خطا در دریافت نرخ ارز: {type(e).__name__}: {e}")
+
+st.caption(
+    "آخرین بارگذاری صفحه: "
+    + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+)
+st.caption("داده‌ها از Tindex دریافت می‌شوند؛ پیش از معامله، قیمت و زمان به‌روزرسانی را بررسی کنید.")
