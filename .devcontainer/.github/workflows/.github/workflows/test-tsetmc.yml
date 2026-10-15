@@ -1,0 +1,35 @@
+
+name: Test TSETMC connection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check TSETMC HTTPS
+        run: |
+          python - <<'PY'
+          import urllib.request
+          import json
+
+          url = "https://cdn.tsetmc.com/api/MarketData/GetMarketOverview/1"
+          req = urllib.request.Request(
+              url,
+              headers={"User-Agent": "Mozilla/5.0"}
+          )
+
+          try:
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  data = json.loads(response.read().decode("utf-8"))
+                  overview = data.get("marketOverview", {})
+                  print("HTTP:", response.status)
+                  print("Market date:", overview.get("marketActivityDEven"))
+                  print("Market state:", overview.get("marketStateTitle"))
+                  print("TSETMC connection: SUCCESS")
+          except Exception as exc:
+              print("TSETMC connection: FAILED")
+              print(type(exc).__name__, str(exc))
+              raise
+          PY
