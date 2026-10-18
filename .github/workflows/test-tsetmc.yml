@@ -1,5 +1,4 @@
 
-
 name: Test TSETMC connection
 
 on:
@@ -9,10 +8,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Test pinned TSETMC IP
+      - name: Test normal DNS connection
         run: |
-          curl --resolve cdn.tsetmc.com:443:46.102.143.218 \
-            --connect-timeout 10 --max-time 20 \
+          curl --connect-timeout 10 --max-time 20 \
             -sS -H 'User-Agent: Mozilla/5.0' \
             -w '\nHTTP_STATUS:%{http_code}\n' \
             'https://cdn.tsetmc.com/api/MarketData/GetMarketOverview/1'
